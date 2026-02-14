@@ -12,8 +12,8 @@ import { Channel, NewMessage } from './types.js';
 function makeMsg(overrides: Partial<NewMessage> = {}): NewMessage {
   return {
     id: '1',
-    chat_jid: 'group@g.us',
-    sender: '123@s.whatsapp.net',
+    chat_jid: 'signal-group:dGVzdA==',
+    sender: '+15559876543',
     sender_name: 'Alice',
     content: 'hello',
     timestamp: '2024-01-01T00:00:00.000Z',

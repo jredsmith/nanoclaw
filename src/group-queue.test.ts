@@ -52,8 +52,8 @@ describe('GroupQueue', () => {
     queue.setProcessMessagesFn(processMessages);
 
     // Enqueue two messages for the same group
-    queue.enqueueMessageCheck('group1@g.us');
-    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueMessageCheck('signal-group:group1');
+    queue.enqueueMessageCheck('signal-group:group1');
 
     // Advance timers to let the first process complete
     await vi.advanceTimersByTimeAsync(200);
@@ -80,9 +80,9 @@ describe('GroupQueue', () => {
     queue.setProcessMessagesFn(processMessages);
 
     // Enqueue 3 groups (limit is 2)
-    queue.enqueueMessageCheck('group1@g.us');
-    queue.enqueueMessageCheck('group2@g.us');
-    queue.enqueueMessageCheck('group3@g.us');
+    queue.enqueueMessageCheck('signal-group:group1');
+    queue.enqueueMessageCheck('signal-group:group2');
+    queue.enqueueMessageCheck('signal-group:group3');
 
     // Let promises settle
     await vi.advanceTimersByTimeAsync(10);
@@ -118,15 +118,15 @@ describe('GroupQueue', () => {
     queue.setProcessMessagesFn(processMessages);
 
     // Start processing messages (takes the active slot)
-    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueMessageCheck('signal-group:group1');
     await vi.advanceTimersByTimeAsync(10);
 
     // While active, enqueue both a task and pending messages
     const taskFn = vi.fn(async () => {
       executionOrder.push('task');
     });
-    queue.enqueueTask('group1@g.us', 'task-1', taskFn);
-    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueTask('signal-group:group1', 'task-1', taskFn);
+    queue.enqueueMessageCheck('signal-group:group1');
 
     // Release the first processing
     resolveFirst!();
@@ -149,7 +149,7 @@ describe('GroupQueue', () => {
     });
 
     queue.setProcessMessagesFn(processMessages);
-    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueMessageCheck('signal-group:group1');
 
     // First call happens immediately
     await vi.advanceTimersByTimeAsync(10);
@@ -174,7 +174,7 @@ describe('GroupQueue', () => {
 
     await queue.shutdown(1000);
 
-    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueMessageCheck('signal-group:group1');
     await vi.advanceTimersByTimeAsync(100);
 
     expect(processMessages).not.toHaveBeenCalled();
@@ -191,7 +191,7 @@ describe('GroupQueue', () => {
     });
 
     queue.setProcessMessagesFn(processMessages);
-    queue.enqueueMessageCheck('group1@g.us');
+    queue.enqueueMessageCheck('signal-group:group1');
 
     // Run through all 5 retries (MAX_RETRIES = 5)
     // Initial call
@@ -226,20 +226,20 @@ describe('GroupQueue', () => {
     queue.setProcessMessagesFn(processMessages);
 
     // Fill both slots
-    queue.enqueueMessageCheck('group1@g.us');
-    queue.enqueueMessageCheck('group2@g.us');
+    queue.enqueueMessageCheck('signal-group:group1');
+    queue.enqueueMessageCheck('signal-group:group2');
     await vi.advanceTimersByTimeAsync(10);
 
     // Queue a third
-    queue.enqueueMessageCheck('group3@g.us');
+    queue.enqueueMessageCheck('signal-group:group3');
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(processed).toEqual(['group1@g.us', 'group2@g.us']);
+    expect(processed).toEqual(['signal-group:group1', 'signal-group:group2']);
 
     // Free up a slot
     completionCallbacks[0]();
     await vi.advanceTimersByTimeAsync(10);
 
-    expect(processed).toContain('group3@g.us');
+    expect(processed).toContain('signal-group:group3');
   });
 });

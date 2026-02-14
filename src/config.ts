@@ -53,3 +53,8 @@ export const TRIGGER_PATTERN = new RegExp(
 // Uses system timezone by default
 export const TIMEZONE =
   process.env.TZ || Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+// Signal channel configuration
+export const SIGNAL_CLI_PATH = process.env.SIGNAL_CLI_PATH || 'signal-cli';
+export const SIGNAL_PHONE_NUMBER = process.env.SIGNAL_PHONE_NUMBER || '';
+export const SIGNAL_CONFIG_DIR = path.resolve(STORE_DIR, 'signal-auth');

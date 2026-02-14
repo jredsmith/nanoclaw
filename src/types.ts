@@ -88,7 +88,7 @@ export interface Channel {
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
   // Whether to prefix outbound messages with the assistant name.
   // Telegram bots already display their name, so they return false.
-  // WhatsApp returns true. Default true if not implemented.
+  // Signal returns true. Default true if not implemented.
   prefixAssistantName?: boolean;
 }
 
@@ -97,5 +97,5 @@ export type OnInboundMessage = (chatJid: string, message: NewMessage) => void;
 
 // Callback for chat metadata discovery.
 // name is optional — channels that deliver names inline (Telegram) pass it here;
-// channels that sync names separately (WhatsApp syncGroupMetadata) omit it.
+// channels that sync names separately (Signal syncGroupMetadata) omit it.
 export type OnChatMetadata = (chatJid: string, timestamp: string, name?: string) => void;

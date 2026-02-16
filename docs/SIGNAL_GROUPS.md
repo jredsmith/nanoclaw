@@ -12,7 +12,7 @@ Ref: https://github.com/AsamK/signal-cli/issues/480
 
 Tell Jarvis in the main channel (Alpha) to create a group:
 
-> "Create a new group called 'Project X' and invite +15056599043"
+> "Create a new group called 'Project X' and invite +number"
 
 Under the hood, this uses signal-cli's `updateGroup`:
 

@@ -17,7 +17,7 @@ Tell Jarvis in the main channel (Alpha) to create a group:
 Under the hood, this uses signal-cli's `updateGroup`:
 
 ```bash
-echo '{"jsonrpc":"2.0","method":"updateGroup","params":{"name":"Project X","members":["+15056599043"]},"id":1}' | nc localhost 7583
+echo '{"jsonrpc":"2.0","method":"updateGroup","params":{"name":"Project X","members":["+number"]},"id":1}' | nc localhost 7583
 ```
 
 Jarvis is automatically a full member since he created the group. After creation, register it via the main channel.

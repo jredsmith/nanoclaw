@@ -1,4 +1,5 @@
 import { ChildProcess, spawn } from 'child_process';
+import { createConnection, Socket } from 'net';
 import { createInterface, Interface as ReadlineInterface } from 'readline';
 
 import {
@@ -25,6 +26,7 @@ const RPC_TIMEOUT_MS = 30_000;
 const READINESS_TIMEOUT_MS = 30_000;
 const RECONNECT_DELAY_MS = 5000;
 const MAX_MESSAGE_LENGTH = 5900;
+const SIGNAL_TCP_PORT = 7583;
 
 export interface SignalChannelOpts {
   onMessage: OnInboundMessage;
@@ -37,6 +39,7 @@ export class SignalChannel implements Channel {
   prefixAssistantName = true;
 
   private daemon: ChildProcess | null = null;
+  private tcpSocket: Socket | null = null;
   private rl: ReadlineInterface | null = null;
   private connected = false;
   private intentionalDisconnect = false;
@@ -74,7 +77,11 @@ export class SignalChannel implements Channel {
           '-a',
           SIGNAL_PHONE_NUMBER,
           'daemon',
-          '--json',
+          '--tcp',
+          `localhost:${SIGNAL_TCP_PORT}`,
+          '--receive-mode',
+          'on-start',
+          '--no-receive-stdout',
         ],
         { stdio: ['pipe', 'pipe', 'pipe'] },
       );
@@ -94,6 +101,7 @@ export class SignalChannel implements Channel {
       this.daemon.on('exit', (code, signal) => {
         logger.info({ code, signal }, 'signal-cli daemon exited');
         this.connected = false;
+        this.closeTcp();
         this.rejectAllPendingRpc('signal-cli daemon exited');
 
         if (!this.intentionalDisconnect && code !== 0) {
@@ -109,54 +117,94 @@ export class SignalChannel implements Channel {
         });
       }
 
-      // Parse stdout for JSON-RPC
+      // Log stdout (daemon info messages)
       if (this.daemon.stdout) {
-        this.rl = createInterface({ input: this.daemon.stdout });
-        this.rl.on('line', (line) => this.handleLine(line));
+        const stdoutRl = createInterface({ input: this.daemon.stdout });
+        stdoutRl.on('line', (line) => {
+          logger.debug({ signalStdout: line }, 'signal-cli');
+        });
       }
 
-      // Readiness probe: try listGroups until it succeeds or timeout
+      // Connect to the TCP JSON-RPC interface with retries
       const startTime = Date.now();
-      const probe = () => {
-        if (this.connected) return; // Already resolved
+      const tryConnect = () => {
+        if (this.connected) return;
 
-        this.rpcCall('listGroups', {})
-          .then(async () => {
+        const sock = createConnection({ host: 'localhost', port: SIGNAL_TCP_PORT }, () => {
+          logger.info({ port: SIGNAL_TCP_PORT }, 'TCP connected to signal-cli daemon');
+          this.tcpSocket = sock;
+          this.rl = createInterface({ input: sock });
+          this.rl.on('line', (line) => this.handleLine(line));
+
+          // Now probe readiness via RPC
+          const probeReady = () => {
             if (this.connected) return;
-            this.connected = true;
-            logger.info('Connected to Signal');
 
-            await this.syncGroupMetadata();
-            if (!this.groupSyncTimerStarted) {
-              this.groupSyncTimerStarted = true;
-              setInterval(() => {
-                this.syncGroupMetadata().catch((err) =>
-                  logger.error({ err }, 'Periodic group sync failed'),
+            this.rpcCall('listGroups', {})
+              .then(async () => {
+                if (this.connected) return;
+                this.connected = true;
+                logger.info('Connected to Signal');
+
+                await this.syncGroupMetadata();
+                if (!this.groupSyncTimerStarted) {
+                  this.groupSyncTimerStarted = true;
+                  setInterval(() => {
+                    this.syncGroupMetadata().catch((err) =>
+                      logger.error({ err }, 'Periodic group sync failed'),
+                    );
+                  }, GROUP_SYNC_INTERVAL_MS);
+                }
+
+                this.flushOutgoingQueue().catch((err) =>
+                  logger.error({ err }, 'Failed to flush outgoing queue'),
                 );
-              }, GROUP_SYNC_INTERVAL_MS);
-            }
 
-            this.flushOutgoingQueue().catch((err) =>
-              logger.error({ err }, 'Failed to flush outgoing queue'),
+                resolve();
+              })
+              .catch(() => {
+                if (Date.now() - startTime > READINESS_TIMEOUT_MS) {
+                  reject(
+                    new Error(
+                      `signal-cli daemon did not become ready within ${READINESS_TIMEOUT_MS}ms. ` +
+                        `Check that ${SIGNAL_PHONE_NUMBER} is registered: npx tsx src/signal-auth.ts register`,
+                    ),
+                  );
+                  return;
+                }
+                setTimeout(probeReady, 1000);
+              });
+          };
+          probeReady();
+        });
+
+        sock.on('error', () => {
+          sock.destroy();
+          if (Date.now() - startTime > READINESS_TIMEOUT_MS) {
+            reject(
+              new Error(
+                `Could not connect to signal-cli TCP on port ${SIGNAL_TCP_PORT} within ${READINESS_TIMEOUT_MS}ms.`,
+              ),
             );
+            return;
+          }
+          // Retry TCP connection after a short delay
+          setTimeout(tryConnect, 1000);
+        });
 
-            resolve();
-          })
-          .catch(() => {
-            if (Date.now() - startTime > READINESS_TIMEOUT_MS) {
-              reject(
-                new Error(
-                  `signal-cli daemon did not become ready within ${READINESS_TIMEOUT_MS}ms. ` +
-                    `Check that ${SIGNAL_PHONE_NUMBER} is registered: npx tsx src/signal-auth.ts register`,
-                ),
-              );
-              return;
-            }
-            setTimeout(probe, 1000);
-          });
+        sock.on('close', () => {
+          if (this.connected && !this.intentionalDisconnect) {
+            logger.warn('TCP connection to signal-cli lost');
+            this.connected = false;
+            this.closeTcp();
+            this.rejectAllPendingRpc('TCP connection lost');
+            setTimeout(() => this.reconnect(), RECONNECT_DELAY_MS);
+          }
+        });
       };
-      // Give daemon a moment to start before first probe
-      setTimeout(probe, 500);
+
+      // Give daemon a moment to start before first TCP connect
+      setTimeout(tryConnect, 1000);
     });
   }
 
@@ -172,13 +220,21 @@ export class SignalChannel implements Channel {
     this.intentionalDisconnect = true;
     this.connected = false;
     this.rejectAllPendingRpc('disconnecting');
+    this.closeTcp();
+    if (this.daemon) {
+      this.daemon.kill('SIGTERM');
+      this.daemon = null;
+    }
+  }
+
+  private closeTcp(): void {
     if (this.rl) {
       this.rl.close();
       this.rl = null;
     }
-    if (this.daemon) {
-      this.daemon.kill('SIGTERM');
-      this.daemon = null;
+    if (this.tcpSocket) {
+      this.tcpSocket.destroy();
+      this.tcpSocket = null;
     }
   }
 
@@ -192,7 +248,7 @@ export class SignalChannel implements Channel {
       return;
     }
 
-    if (!this.connected || !this.daemon?.stdin) {
+    if (!this.connected || !this.tcpSocket) {
       this.outgoingQueue.push({ jid, text });
       logger.info(
         { jid, length: text.length, queueSize: this.outgoingQueue.length },
@@ -367,8 +423,8 @@ export class SignalChannel implements Channel {
     params: Record<string, unknown>,
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      if (!this.daemon?.stdin) {
-        reject(new Error('signal-cli daemon not running'));
+      if (!this.tcpSocket) {
+        reject(new Error('signal-cli TCP socket not connected'));
         return;
       }
 
@@ -384,7 +440,7 @@ export class SignalChannel implements Channel {
       }, RPC_TIMEOUT_MS);
 
       this.pendingRpc.set(id, { resolve, reject, timer });
-      this.daemon.stdin.write(request);
+      this.tcpSocket.write(request);
     });
   }
 

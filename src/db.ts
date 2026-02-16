@@ -235,6 +235,7 @@ export function getNewMessages(
   jids: string[],
   lastTimestamp: string,
   botPrefix: string,
+  allowedSendersPerJid?: Record<string, string[] | undefined>,
 ): { messages: NewMessage[]; newTimestamp: string } {
   if (jids.length === 0) return { messages: [], newTimestamp: lastTimestamp };
 
@@ -247,9 +248,17 @@ export function getNewMessages(
     ORDER BY timestamp
   `;
 
-  const rows = db
+  let rows = db
     .prepare(sql)
     .all(lastTimestamp, ...jids, `${botPrefix}:%`) as NewMessage[];
+
+  // Apply per-group sender allowlists
+  if (allowedSendersPerJid) {
+    rows = rows.filter((msg) => {
+      const allowed = allowedSendersPerJid[msg.chat_jid];
+      return !allowed || allowed.length === 0 || allowed.includes(msg.sender);
+    });
+  }
 
   let newTimestamp = lastTimestamp;
   for (const row of rows) {
@@ -263,17 +272,24 @@ export function getMessagesSince(
   chatJid: string,
   sinceTimestamp: string,
   botPrefix: string,
+  allowedSenders?: string[],
 ): NewMessage[] {
   // Filter out bot's own messages by checking content prefix
-  const sql = `
+  let sql = `
     SELECT id, chat_jid, sender, sender_name, content, timestamp
     FROM messages
     WHERE chat_jid = ? AND timestamp > ? AND content NOT LIKE ?
-    ORDER BY timestamp
   `;
-  return db
-    .prepare(sql)
-    .all(chatJid, sinceTimestamp, `${botPrefix}:%`) as NewMessage[];
+  const params: unknown[] = [chatJid, sinceTimestamp, `${botPrefix}:%`];
+
+  if (allowedSenders && allowedSenders.length > 0) {
+    const ph = allowedSenders.map(() => '?').join(',');
+    sql += ` AND sender IN (${ph})`;
+    params.push(...allowedSenders);
+  }
+
+  sql += ` ORDER BY timestamp`;
+  return db.prepare(sql).all(...params) as NewMessage[];
 }
 
 export function createTask(
